@@ -1,0 +1,10 @@
+[MASTER]
+jobs = 0
+load-plugins = pylint.extensions.docparams
+
+[MESSAGES CONTROL]
+disable = all  ; On désactive tout car trop de bruit on réactive seulement ce qui checke la concordance des arguments dans les fonctions et leur doc
+enable = missing-param-doc,
+       differing-param-doc,
+       differing-type-doc,
+       missing-return-doc

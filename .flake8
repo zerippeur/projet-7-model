@@ -1,0 +1,11 @@
+[flake8]
+# ignore=B008,E121,E123,E126,E203,E226,E24,E704,W503,W504,D100,D105,D200,D202,D301,D402
+max-line-length = 88  # Colle avec la taille par défaut de black
+exclude =
+    .git,  # Pour ne pas valider les fichiers dans .git
+    .mypy_cache,  # Idem cache mypy
+    .pytest_cache,  # Idem cache pytest
+    .venv # Idem venv
+per-file-ignores =
+    tests/*:D  # Ne pas vérifier la documentation dans les tests
+max-complexity = 9  # Pour ne pas faire une fonction trop longue = à régler si besoin

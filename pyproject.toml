@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "model"
+version = "0.1.0"
+description = ""
+authors = ["zerippeur <zerippeur@protonmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^0.982"
+black = "^22.10.0"
+flake8-docstrings = "^1.6.0"
+flake8-bugbear = "^22.9.23"
+isort = "^5.10.1"
+pylint = "^2.15.5"
+
+[tool.isort]
+profile = "black"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

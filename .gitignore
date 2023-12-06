@@ -1,0 +1,10 @@
+# Pour ne pas envoyer sur github le dossier cache de python
+__pycache__
+# Idem dossier cache mypy
+.mypy_cache
+# Idem dossier cace pytest
+.pytest_cache
+# Idem dossier build de Sphinx
+build/
+# Idem dossier build de poetry
+dist/
