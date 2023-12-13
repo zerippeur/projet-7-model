@@ -3,7 +3,8 @@ import pandas as pd
 import time
 from contextlib import contextmanager
 import warnings
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
+from sklearn.model_selection import train_test_split
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 @contextmanager
@@ -48,7 +49,7 @@ def one_hot_encoder(df: pd.DataFrame, nan_as_category: bool = True) -> Tuple[pd.
     return encoded_df, new_columns
 
 # Preprocess application_train.csv and application_test.csv
-def application_train_test(num_rows=None, nan_as_category=False):
+def application_train_dataset(num_rows=None, nan_as_category=False):
     """
     Reads the application train and test data from CSV files and merges them into a single DataFrame.
 
@@ -60,36 +61,32 @@ def application_train_test(num_rows=None, nan_as_category=False):
         pandas.DataFrame: The merged DataFrame containing the train and test data.
     """
     # Read data and merge
-    train_data = pd.read_csv('./input/application_train.csv', nrows=num_rows, sep=',', encoding='utf_8')
-    test_data = pd.read_csv('./input/application_test.csv', nrows=num_rows, sep=',', encoding='utf_8')
-    merged_data = pd.concat([train_data, test_data]).reset_index()
+    train_data = pd.read_csv('./input/application_train.csv', nrows=num_rows, sep=',', encoding='utf_8').reset_index()
 
     # Optional: Remove 4 applications with XNA CODE_GENDER (train set)
-    merged_data = merged_data[merged_data['CODE_GENDER'] != 'XNA']
+    train_data = train_data[train_data['CODE_GENDER'] != 'XNA']
 
     # Categorical features with Binary encode (0 or 1; two categories)
     binary_features = ['CODE_GENDER', 'FLAG_OWN_CAR', 'FLAG_OWN_REALTY']
     for feature in binary_features:
-        merged_data[feature], _ = pd.factorize(merged_data[feature])
+        train_data[feature], _ = pd.factorize(train_data[feature])
 
     # Categorical features with One-Hot encode
-    merged_data, _ = one_hot_encoder(merged_data, nan_as_category)
+    train_data, _ = one_hot_encoder(train_data, nan_as_category)
 
     # NaN values for DAYS_EMPLOYED: 365.243 -> nan
-    merged_data['DAYS_EMPLOYED'].replace(365243, np.nan, inplace=True)
+    train_data['DAYS_EMPLOYED'].replace(365243, np.nan, inplace=True)
 
     # Some simple new features (percentages)
-    merged_data['DAYS_EMPLOYED_PERC'] = merged_data['DAYS_EMPLOYED'] / merged_data['DAYS_BIRTH']
-    merged_data['INCOME_CREDIT_PERC'] = merged_data['AMT_INCOME_TOTAL'] / merged_data['AMT_CREDIT']
-    merged_data['INCOME_PER_PERSON'] = merged_data['AMT_INCOME_TOTAL'] / merged_data['CNT_FAM_MEMBERS']
-    merged_data['ANNUITY_INCOME_PERC'] = merged_data['AMT_ANNUITY'] / merged_data['AMT_INCOME_TOTAL']
-    merged_data['PAYMENT_RATE'] = merged_data['AMT_ANNUITY'] / merged_data['AMT_CREDIT']
+    train_data['DAYS_EMPLOYED_PERC'] = train_data['DAYS_EMPLOYED'] / train_data['DAYS_BIRTH']
+    train_data['INCOME_CREDIT_PERC'] = train_data['AMT_INCOME_TOTAL'] / train_data['AMT_CREDIT']
+    train_data['INCOME_PER_PERSON'] = train_data['AMT_INCOME_TOTAL'] / train_data['CNT_FAM_MEMBERS']
+    train_data['ANNUITY_INCOME_PERC'] = train_data['AMT_ANNUITY'] / train_data['AMT_INCOME_TOTAL']
+    train_data['PAYMENT_RATE'] = train_data['AMT_ANNUITY'] / train_data['AMT_CREDIT']
 
-    merged_data.set_index('SK_ID_CURR', inplace=True)
+    train_data.set_index('SK_ID_CURR', inplace=True)
 
-    del test_data
-
-    return merged_data
+    return train_data
 
 # Preprocess bureau.csv and bureau_balance.csv
 def bureau_and_balance(num_rows: int = None, nan_as_category: bool = True) -> pd.DataFrame:
@@ -357,9 +354,73 @@ def credit_card_balance(max_rows: Optional[int] = None, nan_as_category: bool = 
     
     return credit_card_balance_agg
 
-def main(debug = True):
+def nan_imputation(df: pd.DataFrame, inf_method: Union[str, None] = 'nan', nan_method: Union[str, None] = 'median') -> None:
+    """
+    Imputes missing values in a pandas DataFrame using specified methods.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing missing values.
+        inf_method (Union[str, None], optional): The method to use for replacing infinite values.
+            Defaults to 'nan'.
+        nan_method (Union[str, None], optional): The method to use for replacing NaN values.
+            Defaults to 'median'.
+
+    Returns:
+        None
+    """
+    inf_methods = ['nan', 'mean', 'median', 'mode']
+    nan_methods = ['mean', 'median', 'mode']
+
+    if inf_method == 'nan':
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    elif inf_method in inf_methods:
+        for col in df.columns:
+            if inf_method == 'mean':
+                fill_value = df[col].mean()
+            elif inf_method == 'median':
+                fill_value = df[col].median()
+            elif inf_method == 'mode':
+                fill_value = df[col].mode().iloc[0]
+            else:
+                fill_value = np.nan
+            df[col].fillna(fill_value, inplace=True)
+    
+    if nan_method in nan_methods:
+        for col in df.columns:
+            if nan_method == 'mean':
+                fill_value = df[col].mean()
+            elif nan_method == 'median':
+                fill_value = df[col].median()
+            elif nan_method == 'mode':
+                fill_value = df[col].mode().iloc[0]
+            else:
+                fill_value = np.nan
+            df[col].fillna(fill_value, inplace=True)
+
+    df.dropna(axis=1, how='all', inplace=True)
+
+def data_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Splits a pandas DataFrame into train and test sets.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to split.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the train and test sets.
+    """
+
+    train_index = train_test_split(df, test_size=0.3, random_state=42, stratify=df['TARGET'])[0].index
+    test_index = df.index.difference(train_index)
+
+    train_df = df.loc[train_index]
+    test_df = df.loc[test_index]
+
+    return train_df, test_df
+
+def main(debug: bool = True, split: bool = True):
     num_rows = 10000 if debug else None
-    df = application_train_test(num_rows)
+    df = application_train_dataset(num_rows)
 
     with timer("Process bureau and bureau_balance"):
         bureau = bureau_and_balance(num_rows)
@@ -391,20 +452,32 @@ def main(debug = True):
         df = df.merge(cc, how='left', on='SK_ID_CURR', validate='1:1')
         del cc
     
-    with timer("Final layout"):
+    with timer("Final encoding and data type changes"):
         df.drop(columns='index')
+        print("features_df shape:", df.shape)
         df, _ = one_hot_encoder(df, nan_as_category=True)
         bool_columns = df.select_dtypes(include='bool').columns
         df[bool_columns] = df[bool_columns].astype('int8')
 
-    if debug:
-        filename = 'features_df_test.csv'
-    else:
-        filename = 'features_df.csv'
+    with timer("NaN imputation"):
+        nan_values_nb = df.isna().sum().sum()
+        nan_imputation(df)
+        print("NaN values imputed: ", nan_values_nb - df.isna().sum().sum())
 
+    if split:
+        with timer("Data split"):
+            train_df, test_df = data_split(df)
+            print("Train df shape:", train_df.shape)
+            print("Test df shape:", test_df.shape)
+        
+        filenames = ["train_df_test.csv", "test_df_test.csv" if debug else "train_df.csv", "test_df.csv"]
+        for filename, dataframe in zip(filenames, [train_df, test_df]):
+            with open(filename, 'w') as file:
+                dataframe.to_csv(file)
+
+    filename = 'features_df_test.csv' if debug else "features_df.csv"
+    
     with open (filename, 'w') as file:
-        df.to_csv(file, index=False)
-
-    return df
+        df.to_csv(file)
 
 main()
