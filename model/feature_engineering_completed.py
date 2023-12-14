@@ -418,7 +418,7 @@ def data_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     return train_df, test_df
 
-def main(debug: bool = True, split: bool = True):
+def main(debug: bool = False, split: bool = True):
     num_rows = 10000 if debug else None
     df = application_train_dataset(num_rows)
 
@@ -470,14 +470,15 @@ def main(debug: bool = True, split: bool = True):
             print("Train df shape:", train_df.shape)
             print("Test df shape:", test_df.shape)
         
-        filenames = ["train_df_test.csv", "test_df_test.csv" if debug else "train_df.csv", "test_df.csv"]
+        filenames = ["train_df_test.csv", "test_df_test.csv"] if debug else ["train_df.csv", "test_df.csv"]
+        print(filenames)
         for filename, dataframe in zip(filenames, [train_df, test_df]):
             with open(filename, 'w') as file:
+                print(filename, dataframe.shape)
                 dataframe.to_csv(file)
-
-    filename = 'features_df_test.csv' if debug else "features_df.csv"
-    
-    with open (filename, 'w') as file:
-        df.to_csv(file)
+    else:
+        filename = 'features_df_test.csv' if debug else "features_df.csv"
+        with open (filename, 'w') as file:
+            df.to_csv(file)
 
 main()
