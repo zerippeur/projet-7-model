@@ -418,7 +418,7 @@ def data_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     return train_df, test_df
 
-def main(debug: bool = False, split: bool = True):
+def main(debug: bool = True, split: bool = True):
     num_rows = 10000 if debug else None
     df = application_train_dataset(num_rows)
 
