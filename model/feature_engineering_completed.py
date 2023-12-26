@@ -354,12 +354,32 @@ def credit_card_balance(max_rows: Optional[int] = None, nan_as_category: bool = 
     
     return credit_card_balance_agg
 
-def nan_imputation(df: pd.DataFrame, inf_method: Union[str, None] = 'nan', nan_method: Union[str, None] = 'median') -> None:
+def data_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Splits a pandas DataFrame into train and test sets.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to split.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the train and test sets.
+    """
+
+    train_index = train_test_split(df, test_size=0.3, random_state=13, stratify=df['TARGET'])[0].index
+    test_index = df.index.difference(train_index)
+
+    train_df = df.loc[train_index]
+    test_df = df.loc[test_index]
+
+    return train_df, test_df
+
+def nan_imputation(train_df: pd.DataFrame, test_df: Optional[pd.DataFrame] = None, inf_method: Union[str, None] = 'nan', nan_method: Union[str, None] = 'median') -> None:
     """
     Imputes missing values in a pandas DataFrame using specified methods.
 
     Args:
-        df (pd.DataFrame): The DataFrame containing missing values.
+        train_df (pd.DataFrame): The DataFrame containing training data, which will be used to implement nan in both train and test sets.
+        test_df (pd.DataFrame): The DataFrame containing test data, which will be filled with imputed values from train set.
         inf_method (Union[str, None], optional): The method to use for replacing infinite values.
             Defaults to 'nan'.
         nan_method (Union[str, None], optional): The method to use for replacing NaN values.
@@ -372,51 +392,40 @@ def nan_imputation(df: pd.DataFrame, inf_method: Union[str, None] = 'nan', nan_m
     nan_methods = ['mean', 'median', 'mode']
 
     if inf_method == 'nan':
-        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        train_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        if test_df is not None:
+            test_df.replace([np.inf, -np.inf], np.nan, inplace=True)
     elif inf_method in inf_methods:
-        for col in df.columns:
+        for col in train_df.columns:
             if inf_method == 'mean':
-                fill_value = df[col].mean()
+                fill_value = train_df[col].mean()
             elif inf_method == 'median':
-                fill_value = df[col].median()
+                fill_value = train_df[col].median()
             elif inf_method == 'mode':
-                fill_value = df[col].mode().iloc[0]
+                fill_value = train_df[col].mode().iloc[0]
             else:
                 fill_value = np.nan
-            df[col].fillna(fill_value, inplace=True)
+            train_df[col].fillna(fill_value, inplace=True)
+            if test_df is not None:
+                test_df[col].fillna(fill_value, inplace=True)
     
     if nan_method in nan_methods:
-        for col in df.columns:
+        for col in train_df.columns:
             if nan_method == 'mean':
-                fill_value = df[col].mean()
+                fill_value = train_df[col].mean()
             elif nan_method == 'median':
-                fill_value = df[col].median()
+                fill_value = train_df[col].median()
             elif nan_method == 'mode':
-                fill_value = df[col].mode().iloc[0]
+                fill_value = train_df[col].mode().iloc[0]
             else:
                 fill_value = np.nan
-            df[col].fillna(fill_value, inplace=True)
+            train_df[col].fillna(fill_value, inplace=True)
+            if test_df is not None:
+                test_df[col].fillna(fill_value, inplace=True)
 
-    df.dropna(axis=1, how='all', inplace=True)
-
-def data_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Splits a pandas DataFrame into train and test sets.
-
-    Args:
-        df (pd.DataFrame): The DataFrame to split.
-
-    Returns:
-        Tuple[pd.DataFrame, pd.DataFrame]: A tuple containing the train and test sets.
-    """
-
-    train_index = train_test_split(df, test_size=0.3, random_state=42, stratify=df['TARGET'])[0].index
-    test_index = df.index.difference(train_index)
-
-    train_df = df.loc[train_index]
-    test_df = df.loc[test_index]
-
-    return train_df, test_df
+    train_df.dropna(axis=1, how='all', inplace=True)
+    if test_df is not None:
+        test_df.dropna(axis=1, how='all', inplace=True)
 
 def main(debug: bool = True, split: bool = True):
     num_rows = 10000 if debug else None
@@ -459,26 +468,40 @@ def main(debug: bool = True, split: bool = True):
         bool_columns = df.select_dtypes(include='bool').columns
         df[bool_columns] = df[bool_columns].astype('int8')
 
-    with timer("NaN imputation"):
-        nan_values_nb = df.isna().sum().sum()
-        nan_imputation(df)
-        print("NaN values imputed: ", nan_values_nb - df.isna().sum().sum())
-
     if split:
         with timer("Data split"):
             train_df, test_df = data_split(df)
             print("Train df shape:", train_df.shape)
             print("Test df shape:", test_df.shape)
-        
-        filenames = ["train_df_test.csv", "test_df_test.csv"] if debug else ["train_df.csv", "test_df.csv"]
-        print(filenames)
-        for filename, dataframe in zip(filenames, [train_df, test_df]):
-            with open(filename, 'w') as file:
-                print(filename, dataframe.shape)
-                dataframe.to_csv(file)
-    else:
-        filename = 'features_df_test.csv' if debug else "features_df.csv"
-        with open (filename, 'w') as file:
-            df.to_csv(file)
 
-main()
+        with timer("NaN imputation"):
+            nan_values_nb_train = train_df.isna().sum().sum()
+            nan_values_nb_test = test_df.isna().sum().sum()
+            nan_imputation(train_df, test_df)
+            print("NaN values imputed in train set: ", nan_values_nb_train - train_df.isna().sum().sum())
+            print("NaN values imputed in test set: ", nan_values_nb_test - test_df.isna().sum().sum())
+
+        with timer("Selecting columns common to train and test"):
+            common_columns = list(set(train_df.columns) & set(test_df.columns))
+            train_df = train_df[common_columns]
+            test_df = test_df[common_columns]
+        
+        with timer("Data saving"):
+            filenames = ["train_df_debug.csv", "test_df_debug.csv"] if debug else ["train_df.csv", "test_df.csv"]
+            print(filenames)
+            for filename, dataframe in zip(filenames, [train_df, test_df]):
+                with open(filename, 'w') as file:
+                    print(filename, dataframe.shape)
+                    dataframe.to_csv(file)
+    else:
+        with timer("NaN imputation"):
+            nan_values_nb = df.isna().sum().sum()
+            nan_imputation(df)
+            print("NaN values imputed: ", nan_values_nb - df.isna().sum().sum())
+
+        with timer("Data saving"):
+            filename = 'features_df_debug.csv' if debug else "features_df.csv"
+            with open (filename, 'w') as file:
+                df.to_csv(file)
+
+main(debug=False, split=False)
