@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from random import randint
 from scipy.stats import uniform, loguniform, randint as sp_randint
+from skopt.space import Real, Integer, Categorical
 
 import time
 from contextlib import contextmanager
@@ -18,11 +19,16 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, roc_curve, accuracy_score, confusion_matrix, make_scorer, fbeta_score, precision_score, recall_score
 from sklearn.model_selection import KFold, StratifiedKFold, GridSearchCV, RandomizedSearchCV
 
+from skopt import BayesSearchCV
+from skopt.plots import plot_convergence
+
 from xgboost import XGBClassifier
 
 from lightgbm import LGBMClassifier
 
 import mlflow
+import mlflow.sklearn
+from mlflow.models import infer_signature
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -81,6 +87,9 @@ def mlflow_run(title: str):
     finally:
         mlflow.end_run()
         print(f"{title} - run ended")
+
+def filter_params(params, param_grid):
+    return {key: value for key, value in param_grid.items() if key in params}
 
 # Define the custom scoring function based on the cost
 def custom_cost_function(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -145,30 +154,11 @@ def fbeta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float=np.sqrt(10), 
         cost = np.array(cost)/max(cost)
         accuracy = [accuracy_score(y_true, threshold_cut(y_hat, threshold=t)) for t in thresholds]
 
-        # confusion_mat = [confusion_matrix(y_true, threshold_cut(y_hat, threshold=t)) for t in thresholds]
-        # fp = [cm[0, 1] for cm in confusion_mat]
-        # fn = [cm[1, 0] for cm in confusion_mat]
-        # tp = [cm[1, 1] for cm in confusion_mat]
-        # tn = [cm[0, 0] for cm in confusion_mat]
-
-        # fp_ratio = np.array(fp) / len(y_true)
-        # fn_ratio = np.array(fn) / len(y_true)
-        # tp_ratio = np.array(tp) / len(y_true)
-        # tn_ratio = np.array(tn) / len(y_true)
-
-        # error = np.array(fp) + np.array(fn)
-        # error_ratio = np.array(error) / len(y_true)
-
         scores_df = pd.DataFrame({
             'threshold': thresholds,
             'fbeta_score': fbeta_scores,
             'precision': precision,
             'recall': recall,
-            # 'fp_ratio': fp_ratio,
-            # 'fn_ratio': fn_ratio,
-            # 'tp_ratio': tp_ratio,
-            # 'tn_ratio': tn_ratio,
-            # 'error_ratio': error_ratio,
             'cost': cost,
             'accuracy': accuracy
         })
@@ -189,6 +179,7 @@ def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sq
         None
     """
     f_beta_curve = fbeta_curve(y_true, y_hat, beta, show_classification=show_classification)
+    plt.figure(figsize=(10, 10))
     plt.plot(f_beta_curve[0], f_beta_curve[1], color='Gold')
 
     colors = ['Gold', 'Darkturquoise', 'Paleturquoise', 'Coral', 'Midnightblue']
@@ -201,18 +192,20 @@ def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sq
 
     if show_classification:
         for string in descriptors[1:]:
-            plt.plot(f_beta_curve[0], f_beta_curve[2][string], color=classification_df.loc[classification_df.descriptors == string, 'colors'].values[0], linestyle=classification_df.loc[classification_df.descriptors == string, 'linestyles'].values[0])
-            # plt.plot(f_beta_curve[0], f_beta_curve[2]['fn_ratio'], color='Coral', linestyle='--')
-            # plt.plot(f_beta_curve[0], f_beta_curve[2]['tp_ratio'], color='Paleturquoise')
-            # plt.plot(f_beta_curve[0], f_beta_curve[2]['tn_ratio'], color='Coral')
-            # plt.plot(f_beta_curve[0], f_beta_curve[2]['precision'], color='Darkturquoise')
-            # plt.plot(f_beta_curve[0], f_beta_curve[2]['recall'], color='Darkturquoise', linestyle='--')
-            # plt.plot(f_beta_curve[0], f_beta_curve[2]['error_ratio'], color='Firebrick')
+            plt.plot(
+                f_beta_curve[0], f_beta_curve[2][string],
+                color=classification_df.loc[classification_df.descriptors == string, 'colors'].values[0],
+                linestyle=classification_df.loc[classification_df.descriptors == string, 'linestyles'].values[0]
+            )
         
         # Find the index where the F-beta score is highest
         max_fbeta_index = np.argmax(f_beta_curve[1])
         max_fbeta_threshold = f_beta_curve[0][max_fbeta_index]
         max_fbeta_score = f_beta_curve[1][max_fbeta_index]
+        max_precision = f_beta_curve[2].loc[max_fbeta_index, 'precision']
+        max_recall = f_beta_curve[2].loc[max_fbeta_index, 'recall']
+        max_cost = f_beta_curve[2].loc[max_fbeta_index, 'cost']
+        max_accuracy = f_beta_curve[2].loc[max_fbeta_index, 'accuracy']
 
         # Plot marker at the point of highest F-beta score
         plt.plot(max_fbeta_threshold, max_fbeta_score, marker='o', markersize=8, color='red')
@@ -221,94 +214,27 @@ def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sq
         plt.axvline(x=max_fbeta_threshold, linestyle='--', color='gray', ymax=max_fbeta_score, linewidth=0.8)
         plt.axhline(y=max_fbeta_score, linestyle='--', color='gray', xmax=max_fbeta_threshold, linewidth=0.8)
 
-        # # Annotate the lines with threshold and F-beta score values
-        # plt.text(max_fbeta_threshold + 0.02, max_fbeta_score - 0.02,
-        #          f'Threshold: {max_fbeta_threshold:.2f}', fontsize=8, color='black')
-        # plt.text(max_fbeta_threshold + 0.02, max_fbeta_score - 0.04,
-        #          f'F_beta: {max_fbeta_score:.4f}', fontsize=8, color='black')
+        # Annotate the point with threshold and F-beta score
+        plt.annotate(
+            f'Threshold: {max_fbeta_threshold:.3f}\n'
+            f'F_beta:    {max_fbeta_score:.3f}\n'
+            f'Precision: {max_precision:.3f}\n'
+            f'Recall:    {max_recall:.3f}\n'
+            f'Accuracy:  {max_accuracy:.3f}\n'
+            f'Cost:      {max_cost:.3f}\n',
+            xy=(max_fbeta_threshold, max_fbeta_score),
+            xytext=(max_fbeta_threshold + 0.1, max_fbeta_score - 0.3),
+            arrowprops=dict(facecolor='black', arrowstyle='->'),
+            fontfamily='Courier New', fontsize=10, fontweight='bold'
+        )
 
-    
     plt.ylabel('F_beta_score')
     plt.title(f'F_beta Curve\nModel: {model_description}')
     plt.xlabel('Threshold')
-    plt.legend(descriptors)
-
-    # Set ticks for x and y axes corresponding to max F-beta score
-    all_xticks = list(plt.xticks()[0])
-    all_yticks = list(plt.yticks()[0])
-    all_xticks.append(max_fbeta_threshold)
-    all_yticks.append(max_fbeta_score)
-    
-    plt.xticks(all_xticks)
-    plt.yticks(all_yticks)
-    
-    # Change color for specific tick labels
-    plt.gca().get_xticklabels()[-1].set_color('red')
-    plt.gca().get_yticklabels()[-1].set_color('red')
-    plt.gca().get_xticklabels()[-1].set_weight('bold')
-    plt.gca().get_yticklabels()[-1].set_weight('bold')
-    plt.gca().get_xticklines()[-1].set_color('red')
-    plt.gca().get_yticklines()[-1].set_color('red')
+    plt.legend(descriptors, loc='upper right')
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-
-
-# class CustomThresholdClassifier(BaseEstimator, ClassifierMixin):
-#     def __init__(self, base_classifier: object, threshold: float = 0.5) -> None:
-#         """
-#         Initializes a new instance of the class.
-
-#         Args:
-#             base_classifier: The base classifier object.
-#             threshold: The threshold value.
-#         """
-#         self.base_classifier = base_classifier
-#         # self.base_classifier = base_classifier(**base_params) if base_params else base_classifier
-#         self.threshold = threshold
-
-#     def fit(self, X: List, y: List) -> Type['CustomThresholdClassifier']:
-#         """Fits the classifier to the training data.
-
-#         Args:
-#             X (List): The input features.
-#             y (List): The target values.
-
-#         Returns:
-#             Classifier: The fitted classifier.
-#         """
-#         self.base_classifier.fit(X, y)
-#         return self
-
-#     def predict_proba(self, X: List[Any]) -> List[List[float]]:
-#         """
-#         Predicts the probabilities of the target classes for the given input data.
-
-#         Args:
-#             X (List[Any]): The input data to be classified.
-
-#         Returns:
-#             List[List[float]]: A list of lists representing the predicted probabilities of the target classes.
-#         """
-#         return self.base_classifier.predict_proba(X)
-
-#     def predict(self, X: Union[np.ndarray, List[List[float]]]) -> Union[np.ndarray, List[int]]:
-#         """
-#         Custom prediction based on the adjusted threshold.
-
-#         Parameters:
-#             X: The input data for prediction. It can be either a numpy array or a list of lists of floats.
-
-#         Returns:
-#             The predicted values based on the adjusted threshold. It can be either a numpy array or a list of integers.
-#         """
-#         return (self.base_classifier.predict_proba(X)[:, 1] > self.threshold).astype(int)
-    
-#     def classes_(self):
-#         """
-#         Returns the class labels.
-#         """
-#         return np.array([0,1])
 
 def balance_classes(X: pd.DataFrame, y: pd.Series, method: Literal['smote', 'randomundersampler']='smote')-> Tuple[pd.DataFrame, pd.Series]:
     """
@@ -334,57 +260,141 @@ def balance_classes(X: pd.DataFrame, y: pd.Series, method: Literal['smote', 'ran
     pipeline = Pipeline([('sampler', sampler)])
     return pipeline.fit_resample(X, y)
 
-def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier', 'LGBMClassifier'], search_method: Literal['grid', 'random']) -> dict:
+def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier', 'LGBMClassifier'], search_method: Literal['grid', 'random', 'bayes']) -> dict:
     """
     Generate the parameter grid for the specified model.
 
     Args:
         model_name: The machine learning model name being tuned.
-        search_method: The search method to use ('grid' or 'random').
+        search_method: The search method to use ('grid', 'random', or 'bayes').
     Returns:
         param_grid: The parameter grid for the specified model.
     """
-
     if model_name == 'LogisticRegression':
-        param_grid = {
-            'C': [0.1, 1, 10] if search_method == 'grid' else uniform(0.1, 9.9),
-            'solver': ['newton-cg', 'lbfgs', 'sag', 'saga'],
-            # 'max_iter': [100, 500, 1000] if search_method == 'grid' else sp_randint(100, 900),
-            'fit_intercept': [True, False],
-            'class_weight': [None, 'balanced']
-        }
-    elif model_name == 'RandomForestClassifier':
-        param_grid = {
-            'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
-            'max_depth': [None, 5, 10, 20] if search_method == 'grid' else sp_randint(5, 20),
-            'min_samples_split': [2, 5, 10] if search_method == 'grid' else sp_randint(2, 10),
-            'min_samples_leaf': [1, 2, 4] if search_method == 'grid' else sp_randint(1, 4),
-            'bootstrap': [True, False]
-        }
-    elif model_name == 'XGBClassifier':
-        param_grid = {
-            'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
-            'max_depth': [3, 4, 5] if search_method == 'grid' else sp_randint(3, 5),
-            'learning_rate': [0.1, 0.2, 0.3] if search_method == 'grid' else uniform(0.1, 0.2),
-            'subsample': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-            'colsample_bytree': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-            'gamma': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-            'reg_alpha': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-            'reg_lambda': [1, 1.1, 1.2] if search_method == 'grid' else uniform(1, 0.2)
-        }
-    elif model_name == 'LGBMClassifier':
-        param_grid = {
-            'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
-            'max_depth': [3, 4, 5] if search_method == 'grid' else sp_randint(3, 5),
-            'learning_rate': [0.1, 0.2, 0.3] if search_method == 'grid' else uniform(0.1, 0.2),
-            'subsample': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-            'colsample_bytree': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-            'gamma': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-            'reg_alpha': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-            'reg_lambda': [1, 1.1, 1.2] if search_method == 'grid' else uniform(1, 0.2)
-        }
+        if search_method == 'grid':
+            param_grid = {
+                'C': [0.1, 1, 10],
+                'class_weight': [None, 'balanced'],
+                'fit_intercept': [True, False],
+                'solver': ['newton-cg', 'lbfgs', 'sag', 'saga']
+            }
+        elif search_method == 'random':
+            param_grid = {
+                'C': uniform(0.1, 9.9),
+                'class_weight': [None, 'balanced'],
+                'fit_intercept': [True, False],
+                'solver': ['newton-cg', 'lbfgs', 'sag', 'saga']
+            }
+        elif search_method == 'bayes':
+            param_grid = {
+                'C': Real(0.1, 10.0),
+                'class_weight': Categorical([None, 'balanced']),
+                'fit_intercept': Categorical([True, False]),
+                'solver': Categorical(['newton-cg', 'lbfgs', 'sag', 'saga'])
+            }
+        else:
+            raise ValueError("Invalid search method")
+    elif model_name in ['RandomForestClassifier', 'XGBClassifier', 'LGBMClassifier']:
+        if search_method == 'grid':
+            param_grid = {
+                'bootstrap': [True, False],
+                'colsample_bytree': [0.8, 1.0],
+                'gamma': [0, 0.1, 0.2],
+                'learning_rate': [0.1, 0.2, 0.3],
+                'max_depth': [None, 5, 10, 20],
+                'min_samples_leaf': [1, 2, 4],
+                'min_samples_split': [2, 5, 10],
+                'n_estimators': [100, 200, 300],
+                'reg_alpha': [0, 0.1, 0.2],
+                'reg_lambda': [1, 1.1, 1.2],
+                'subsample': [0.7, 1.0]
+            }
+        elif search_method == 'random':
+            param_grid = {
+                'bootstrap': [True, False],
+                'colsample_bytree': uniform(0.8, 0.2),
+                'gamma': uniform(0, 0.2),
+                'learning_rate': uniform(0.01, 0.2),
+                'max_depth': sp_randint(3, 21),
+                'min_samples_leaf': sp_randint(1, 5),
+                'min_samples_split': sp_randint(2, 11),
+                'n_estimators': sp_randint(100, 301),
+                'reg_alpha': uniform(0, 0.2),
+                'reg_lambda': uniform(1, 0.2),
+                'subsample': uniform(0.7, 0.2)
+            }
+        elif search_method == 'bayes':
+            param_grid = {
+                'bootstrap': Categorical([True, False]),
+                'colsample_bytree': Real(0.8, 1),
+                'gamma': Real(0, 0.2),
+                'learning_rate': Real(0.001, 0.3),
+                'max_depth': Integer(3, 21),
+                'min_samples_leaf': Integer(1, 5),
+                'min_samples_split': Integer(2, 11),
+                'n_estimators': Integer(100, 301),
+                'reg_alpha': Real(0, 0.5),
+                'reg_lambda': Real(1, 10),
+                'subsample': Real(0.1, 1)
+            }
+        else:
+            raise ValueError("Invalid search method")
+    else:
+        raise ValueError("Invalid model name")
 
     return param_grid
+
+# def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier', 'LGBMClassifier'], search_method: Literal['grid', 'random']) -> dict:
+#     """
+#     Generate the parameter grid for the specified model.
+
+#     Args:
+#         model_name: The machine learning model name being tuned.
+#         search_method: The search method to use ('grid' or 'random').
+#     Returns:
+#         param_grid: The parameter grid for the specified model.
+#     """
+
+#     if model_name == 'LogisticRegression':
+#         param_grid = {
+#             'C': [0.1, 1, 10] if search_method == 'grid' else uniform(0.1, 9.9),
+#             'solver': ['newton-cg', 'lbfgs', 'sag', 'saga'],
+#             # 'max_iter': [100, 500, 1000] if search_method == 'grid' else sp_randint(100, 900),
+#             'fit_intercept': [True, False],
+#             'class_weight': [None, 'balanced']
+#         }
+#     elif model_name == 'RandomForestClassifier':
+#         param_grid = {
+#             'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
+#             'max_depth': [None, 5, 10, 20] if search_method == 'grid' else sp_randint(5, 20),
+#             'min_samples_split': [2, 5, 10] if search_method == 'grid' else sp_randint(2, 10),
+#             'min_samples_leaf': [1, 2, 4] if search_method == 'grid' else sp_randint(1, 4),
+#             'bootstrap': [True, False]
+#         }
+#     elif model_name == 'XGBClassifier':
+#         param_grid = {
+#             'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
+#             'max_depth': [3, 4, 5] if search_method == 'grid' else sp_randint(3, 5),
+#             'learning_rate': [0.1, 0.2, 0.3] if search_method == 'grid' else uniform(0.1, 0.2),
+#             'subsample': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
+#             'colsample_bytree': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
+#             'gamma': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
+#             'reg_alpha': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
+#             'reg_lambda': [1, 1.1, 1.2] if search_method == 'grid' else uniform(1, 0.2)
+#         }
+#     elif model_name == 'LGBMClassifier':
+#         param_grid = {
+#             'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
+#             'max_depth': [3, 4, 5] if search_method == 'grid' else sp_randint(3, 5),
+#             'learning_rate': [0.1, 0.2, 0.3] if search_method == 'grid' else uniform(0.1, 0.2),
+#             'subsample': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
+#             'colsample_bytree': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
+#             'gamma': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
+#             'reg_alpha': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
+#             'reg_lambda': [1, 1.1, 1.2] if search_method == 'grid' else uniform(1, 0.2)
+#         }
+
+#     return param_grid
 
 def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Union[list, np.array], X_test: Union[list, np.array], y_test: Union[list, np.array], search_method: Literal['grid', 'random'], balance_method: Literal['smote', 'randomundersampler'], debug: bool = False):
     """
@@ -420,9 +430,17 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
         raise ValueError("Invalid balance method. Choose 'smote' or 'randomundersampler'.")
     
     param_grid = generate_param_grid(model_name, search_method)
+    filtered_grid = filter_params(model.get_params(), param_grid)
 
     # Start MLflow run
     path = f"{model_name}_model__{search_method}_search__{balance_method}_balancing__{run_type}_run"
+
+    # Set tracking server uri for logging    
+    mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
+
+    # Create new MLflow experiment
+    mlflow.set_experiment(path)
+
     with mlflow.start_run(run_name=path):
     
         try:
@@ -431,11 +449,13 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             
             # Perform grid search or random search based on specified search method
             if search_method == "grid":
-                search = GridSearchCV(model, param_grid, cv=5)
+                search = GridSearchCV(model, filtered_grid, cv=5, scoring='roc_auc')
             elif search_method == "random":
-                search = RandomizedSearchCV(model, param_grid, cv=5, n_iter=20)
+                search = RandomizedSearchCV(model, filtered_grid, cv=5, n_iter=20, scoring='roc_auc')
+            elif search_method == "bayes":
+                search = BayesSearchCV(model, filtered_grid, cv=5, n_iter=20, scoring='roc_auc')
             else:
-                raise ValueError("Invalid search method. Choose 'grid' or 'random'.")
+                raise ValueError("Invalid search method. Choose 'grid', 'random' or 'bayes.")
             
             search.fit(X_train_resampled, y_train_resampled)
 
@@ -454,6 +474,9 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             y_pred = search.predict(X_train_resampled)
             y_pred_test = search.predict(X_test)
 
+            # Infer the model signature
+            signature = infer_signature(X_train_resampled, y_hat)
+
             auc_train = roc_auc_score(y_train_resampled, y_hat)
             accuracy_train = accuracy_score(y_train_resampled, y_pred)
             auc_test = roc_auc_score(y_test, y_hat_test)
@@ -471,7 +494,7 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             mlflow.log_metrics(metrics)  # Log the metrics
 
             # Log best model
-            mlflow.sklearn.log_model(best_model, "best_model")
+            mlflow.sklearn.log_model(best_model, artifact_path=path, signature=signature, input_example=X_train_resampled, registered_model_name=model_name)
 
             plot_f_beta_curve(y_train_resampled, y_hat, model_description='XGBClassifier', show_classification=True, save_path=path)
 
@@ -480,7 +503,7 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             mlflow.end_run()
 
 def main(model: Union[LogisticRegression, RandomForestClassifier, XGBClassifier, LGBMClassifier] = LogisticRegression(),
-         search_method: Literal['grid', 'random'] = 'random',
+         search_method: Literal['grid', 'random', 'bayes'] = 'bayes',
          balance_method: Literal['smote', 'randomundersampler'] = 'randomundersampler',
          debug: bool = True):
     
@@ -495,4 +518,4 @@ def main(model: Union[LogisticRegression, RandomForestClassifier, XGBClassifier,
     with timer("Tuning model"):
         tune_model(model, X_train, y_train, X_test, y_test, search_method, balance_method, debug)
 
-main(model=RandomForestClassifier(n_jobs=-1, random_state=42), search_method='random', balance_method='randomundersampler', debug=True)
+main(model=XGBClassifier(n_jobs=-1, random_state=42), search_method='bayes', balance_method='randomundersampler', debug=True)

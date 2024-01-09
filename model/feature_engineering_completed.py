@@ -461,12 +461,13 @@ def main(debug: bool = True, split: bool = True):
         df = df.merge(cc, how='left', on='SK_ID_CURR', validate='1:1')
         del cc
     
-    with timer("Final encoding and data type changes"):
+    with timer("Final encoding, data type changes and column names cleaning"):
         df.drop(columns='index')
         print("features_df shape:", df.shape)
         df, _ = one_hot_encoder(df, nan_as_category=True)
         bool_columns = df.select_dtypes(include='bool').columns
         df[bool_columns] = df[bool_columns].astype('int8')
+        df.rename(columns=lambda x: x.replace(' ', '_'), inplace=True)
 
     if split:
         with timer("Data split"):
