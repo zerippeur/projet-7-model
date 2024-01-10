@@ -326,16 +326,16 @@ def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestC
         elif search_method == 'bayes':
             param_grid = {
                 'bootstrap': Categorical([True, False]),
-                'colsample_bytree': Real(0.8, 1),
+                'colsample_bytree': Real(0.7, 1),
                 'gamma': Real(0, 0.2),
-                'learning_rate': Real(0.001, 0.3),
+                'learning_rate': Real(0.0001, 0.1),
                 'max_depth': Integer(3, 21),
                 'min_samples_leaf': Integer(1, 5),
                 'min_samples_split': Integer(2, 11),
                 'n_estimators': Integer(100, 301),
-                'reg_alpha': Real(0, 0.5),
+                'reg_alpha': Real(0, 1),
                 'reg_lambda': Real(1, 10),
-                'subsample': Real(0.1, 1)
+                'subsample': Real(0.01, 1)
             }
         else:
             raise ValueError("Invalid search method")
@@ -343,58 +343,6 @@ def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestC
         raise ValueError("Invalid model name")
 
     return param_grid
-
-# def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier', 'LGBMClassifier'], search_method: Literal['grid', 'random']) -> dict:
-#     """
-#     Generate the parameter grid for the specified model.
-
-#     Args:
-#         model_name: The machine learning model name being tuned.
-#         search_method: The search method to use ('grid' or 'random').
-#     Returns:
-#         param_grid: The parameter grid for the specified model.
-#     """
-
-#     if model_name == 'LogisticRegression':
-#         param_grid = {
-#             'C': [0.1, 1, 10] if search_method == 'grid' else uniform(0.1, 9.9),
-#             'solver': ['newton-cg', 'lbfgs', 'sag', 'saga'],
-#             # 'max_iter': [100, 500, 1000] if search_method == 'grid' else sp_randint(100, 900),
-#             'fit_intercept': [True, False],
-#             'class_weight': [None, 'balanced']
-#         }
-#     elif model_name == 'RandomForestClassifier':
-#         param_grid = {
-#             'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
-#             'max_depth': [None, 5, 10, 20] if search_method == 'grid' else sp_randint(5, 20),
-#             'min_samples_split': [2, 5, 10] if search_method == 'grid' else sp_randint(2, 10),
-#             'min_samples_leaf': [1, 2, 4] if search_method == 'grid' else sp_randint(1, 4),
-#             'bootstrap': [True, False]
-#         }
-#     elif model_name == 'XGBClassifier':
-#         param_grid = {
-#             'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
-#             'max_depth': [3, 4, 5] if search_method == 'grid' else sp_randint(3, 5),
-#             'learning_rate': [0.1, 0.2, 0.3] if search_method == 'grid' else uniform(0.1, 0.2),
-#             'subsample': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-#             'colsample_bytree': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-#             'gamma': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-#             'reg_alpha': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-#             'reg_lambda': [1, 1.1, 1.2] if search_method == 'grid' else uniform(1, 0.2)
-#         }
-#     elif model_name == 'LGBMClassifier':
-#         param_grid = {
-#             'n_estimators': [100, 200, 300] if search_method == 'grid' else sp_randint(100, 300),
-#             'max_depth': [3, 4, 5] if search_method == 'grid' else sp_randint(3, 5),
-#             'learning_rate': [0.1, 0.2, 0.3] if search_method == 'grid' else uniform(0.1, 0.2),
-#             'subsample': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-#             'colsample_bytree': [0.8, 1.0] if search_method == 'grid' else uniform(0.8, 0.2),
-#             'gamma': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-#             'reg_alpha': [0, 0.1, 0.2] if search_method == 'grid' else uniform(0, 0.2),
-#             'reg_lambda': [1, 1.1, 1.2] if search_method == 'grid' else uniform(1, 0.2)
-#         }
-
-#     return param_grid
 
 def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Union[list, np.array], X_test: Union[list, np.array], y_test: Union[list, np.array], search_method: Literal['grid', 'random'], balance_method: Literal['smote', 'randomundersampler'], debug: bool = False):
     """
@@ -435,7 +383,7 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
     # Start MLflow run
     path = f"{model_name}_model__{search_method}_search__{balance_method}_balancing__{run_type}_run"
 
-    # Set tracking server uri for logging    
+    # Set tracking server uri for logging (start mlflow server first: mlflow server --host 127.0.0.1 --port 8080 in git bash)
     mlflow.set_tracking_uri(uri="http://127.0.0.1:8080")
 
     # Create new MLflow experiment
@@ -453,7 +401,7 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             elif search_method == "random":
                 search = RandomizedSearchCV(model, filtered_grid, cv=5, n_iter=20, scoring='roc_auc')
             elif search_method == "bayes":
-                search = BayesSearchCV(model, filtered_grid, cv=5, n_iter=20, scoring='roc_auc')
+                search = BayesSearchCV(model, filtered_grid, cv=5, n_iter=100, scoring='roc_auc')
             else:
                 raise ValueError("Invalid search method. Choose 'grid', 'random' or 'bayes.")
             
