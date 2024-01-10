@@ -391,10 +391,7 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
 
     with mlflow.start_run(run_name=path):
     
-        try:
-            # # Define the custom scorer using the custom cost function
-            # custom_scorer = make_scorer(custom_cost_function, greater_is_better=False)
-            
+        try:            
             # Perform grid search or random search based on specified search method
             if search_method == "grid":
                 search = GridSearchCV(model, filtered_grid, cv=5, scoring='roc_auc')
@@ -410,12 +407,6 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             # # Reconstruct and fit the best model
             best_params = search.best_params_
             best_model = search.best_estimator_
-            
-            # # Calculate and log AUC and accuracy
-            # y_pred_proba = best_model.predict_proba(X)[:, 1]  # Assuming binary classification
-            # y_pred_proba_test = best_model.predict_proba(X_test)[:, 1]
-            # y_pred = best_model.predict(X)
-            # y_pred_test = best_model.predict(X_test)
 
             y_hat = search.predict_proba(X_train_resampled)[:, 1]  # Assuming binary classification
             y_hat_test = search.predict_proba(X_test)[:, 1]
