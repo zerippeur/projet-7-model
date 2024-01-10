@@ -6,6 +6,7 @@ import warnings
 from typing import List, Tuple, Optional, Union
 from sklearn.model_selection import train_test_split
 warnings.simplefilter(action='ignore', category=FutureWarning)
+import re
 
 @contextmanager
 def timer(title: str):
@@ -461,13 +462,16 @@ def main(debug: bool = True, split: bool = True):
         df = df.merge(cc, how='left', on='SK_ID_CURR', validate='1:1')
         del cc
     
-    with timer("Final encoding, data type changes and column names cleaning"):
+    with timer("Final encoding, data type changes"):
         df.drop(columns='index')
         print("features_df shape:", df.shape)
         df, _ = one_hot_encoder(df, nan_as_category=True)
         bool_columns = df.select_dtypes(include='bool').columns
         df[bool_columns] = df[bool_columns].astype('int8')
-        df.rename(columns=lambda x: x.replace(' ', '_'), inplace=True)
+        df.columns = df.columns.str.replace(r',(?=\s)(?!\s+dtype)', '_ ', regex=True)
+        df.columns = df.columns.str.replace(r':(?=\s)(?!\s+dtype)', '_ ', regex=True)
+        df.columns = df.columns.str.replace(r'\s?/\s?', '_', regex=True)
+        df.columns = df.columns.str.replace('-', '_', regex=True)
 
     if split:
         with timer("Data split"):
@@ -505,4 +509,4 @@ def main(debug: bool = True, split: bool = True):
             with open (filename, 'w') as file:
                 df.to_csv(file)
 
-main(debug=False, split=False)
+main(debug=True, split=False)
