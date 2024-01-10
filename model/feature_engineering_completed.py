@@ -428,6 +428,55 @@ def nan_imputation(train_df: pd.DataFrame, test_df: Optional[pd.DataFrame] = Non
     if test_df is not None:
         test_df.dropna(axis=1, how='all', inplace=True)
 
+def clean_columns_names(df):
+    column_names = df.columns.to_list()
+    replace_dict = {
+        ',': '_',
+        ':': '_',
+        '-': '_',
+        '/': '_',
+        '(': '',
+        ')': '',
+        '+': '',
+        '"': '',
+        ' ': '_',
+        '__': '_',
+        '__': '_'
+    }
+
+    for i in range(len(column_names)):
+        for old_char, new_char in replace_dict.items():
+            column_names[i] = column_names[i].replace(old_char, new_char)
+    
+    df.columns = column_names
+    return df
+
+def order_and_save_columns_as_csv(df, file_name):
+    """
+    Order and save the columns names of a DataFrame as a CSV file and returns the reordered DataFrame.
+
+    Args:
+        df (pandas.DataFrame): The DataFrame to extract the column names from.
+        file_name (str): The name of the output CSV file.
+        inplace (bool, optional): Whether to save the DataFrame in-place. Defaults to True.
+
+    Returns:
+        pandas.DataFrame: The original DataFrame with the reordered column names.
+    """
+    # Extract column list.
+    columns_names = df.columns.to_list()
+    columns_names.sort()
+    for i, col in enumerate(['index', 'TARGET']):
+        columns_names.insert(i, columns_names.pop(columns_names.index(col)))
+
+    # Create a new DataFrame with the column names
+    columns_df = pd.DataFrame({'columns': columns_names})
+
+    # Save the DataFrame as a CSV file
+    columns_df.to_csv(f'{file_name}.csv', index=False)
+
+    return df[columns_names]
+
 def main(debug: bool = True, split: bool = True):
     num_rows = 10000 if debug else None
     df = application_train_dataset(num_rows)
@@ -468,10 +517,7 @@ def main(debug: bool = True, split: bool = True):
         df, _ = one_hot_encoder(df, nan_as_category=True)
         bool_columns = df.select_dtypes(include='bool').columns
         df[bool_columns] = df[bool_columns].astype('int8')
-        df.columns = df.columns.str.replace(r',(?=\s)(?!\s+dtype)', '_ ', regex=True)
-        df.columns = df.columns.str.replace(r':(?=\s)(?!\s+dtype)', '_ ', regex=True)
-        df.columns = df.columns.str.replace(r'\s?/\s?', '_', regex=True)
-        df.columns = df.columns.str.replace('-', '_', regex=True)
+        df = clean_columns_names(df)
 
     if split:
         with timer("Data split"):
@@ -497,7 +543,11 @@ def main(debug: bool = True, split: bool = True):
             for filename, dataframe in zip(filenames, [train_df, test_df]):
                 with open(filename, 'w') as file:
                     print(filename, dataframe.shape)
+                    col_filename = f'{filename[:-4]}_columns.csv'
+                    dataframe = order_and_save_columns_as_csv(dataframe, col_filename)
                     dataframe.to_csv(file)
+                    
+                    
     else:
         with timer("NaN imputation"):
             nan_values_nb = df.isna().sum().sum()
@@ -507,6 +557,8 @@ def main(debug: bool = True, split: bool = True):
         with timer("Data saving"):
             filename = 'features_df_debug.csv' if debug else "features_df.csv"
             with open (filename, 'w') as file:
+                col_filename = f'{filename[:-4]}_columns.csv'
+                df = order_and_save_columns_as_csv(df, col_filename)
                 df.to_csv(file)
 
-main(debug=True, split=False)
+main(debug=False, split=True)
