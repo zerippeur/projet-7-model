@@ -447,10 +447,10 @@ def main(model: Union[LogisticRegression, RandomForestClassifier, XGBClassifier,
          debug: bool = True):
     
     with timer("Data loading"):
-        train_data = pd.read_csv('./train_df_debug.csv') if debug else pd.read_csv('./train_df.csv')
+        train_data = pd.read_csv('features/train_df_debug.csv') if debug else pd.read_csv('features/train_df.csv')
         X_train = train_data.drop(columns=['SK_ID_CURR', 'index', 'TARGET'])
         y_train = train_data['TARGET']
-        test_data = pd.read_csv('./test_df_debug.csv') if debug else pd.read_csv('./test_df.csv')
+        test_data = pd.read_csv('features/test_df_debug.csv') if debug else pd.read_csv('features/test_df.csv')
         X_test = test_data.drop(columns=['SK_ID_CURR', 'index', 'TARGET'])
         y_test = test_data['TARGET']
 

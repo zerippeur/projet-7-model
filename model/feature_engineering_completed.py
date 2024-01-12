@@ -7,6 +7,7 @@ from typing import List, Tuple, Optional, Union
 from sklearn.model_selection import train_test_split
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import re
+import sqlite3
 
 @contextmanager
 def timer(title: str):
@@ -451,14 +452,12 @@ def clean_columns_names(df):
     df.columns = column_names
     return df
 
-def order_and_save_columns_as_csv(df, file_name):
+def order_columns(df):
     """
-    Order and save the columns names of a DataFrame as a CSV file and returns the reordered DataFrame.
+    Order the columns names of a DataFrame and returns the reordered DataFrame.
 
     Args:
         df (pandas.DataFrame): The DataFrame to extract the column names from.
-        file_name (str): The name of the output CSV file.
-        inplace (bool, optional): Whether to save the DataFrame in-place. Defaults to True.
 
     Returns:
         pandas.DataFrame: The original DataFrame with the reordered column names.
@@ -469,13 +468,24 @@ def order_and_save_columns_as_csv(df, file_name):
     for i, col in enumerate(['index', 'TARGET']):
         columns_names.insert(i, columns_names.pop(columns_names.index(col)))
 
-    # Create a new DataFrame with the column names
-    columns_df = pd.DataFrame({'columns': columns_names})
-
-    # Save the DataFrame as a CSV file
-    columns_df.to_csv(f'{file_name}.csv', index=False)
-
     return df[columns_names]
+
+def save_to_db(df, table_name, db_path='clients_infos'):
+    """
+    Saves a dataframe as a table in a SQLite database.
+
+    Args:
+        df (pandas.DataFrame): The DataFrame to save as a table.
+        table_name (str): The name of the table in the database.
+        db_name (str): The name of the database.
+
+    Returns:
+        None
+    """
+
+    conn = sqlite3.connect(f'features/{db_path}.db')
+    df.to_sql(f'{table_name}', conn, if_exists='replace', index=False)
+    conn.close()
 
 def main(debug: bool = True, split: bool = True):
     num_rows = 10000 if debug else None
@@ -538,15 +548,14 @@ def main(debug: bool = True, split: bool = True):
             test_df = test_df[common_columns]
         
         with timer("Data saving"):
-            filenames = ["train_df_debug.csv", "test_df_debug.csv"] if debug else ["train_df.csv", "test_df.csv"]
+            filenames = ["train_df_debug", "test_df_debug"] if debug else ["train_df", "test_df"]
             print(filenames)
-            for filename, dataframe in zip(filenames, [train_df, test_df]):
-                with open(filename, 'w') as file:
-                    print(filename, dataframe.shape)
-                    col_filename = f'{filename[:-4]}_columns.csv'
-                    dataframe = order_and_save_columns_as_csv(dataframe, col_filename)
-                    dataframe.to_csv(file)
-                    
+            for filename, df in zip(filenames, [train_df, test_df]):
+                with open(f'features/{filename}.csv', 'w') as file:
+                    print(filename, df.shape)
+                    df = order_columns(df)
+                    save_to_db(df, table_name=filename)
+                    df.to_csv(file)            
                     
     else:
         with timer("NaN imputation"):
@@ -555,10 +564,10 @@ def main(debug: bool = True, split: bool = True):
             print("NaN values imputed: ", nan_values_nb - df.isna().sum().sum())
 
         with timer("Data saving"):
-            filename = 'features_df_debug.csv' if debug else "features_df.csv"
-            with open (filename, 'w') as file:
-                col_filename = f'{filename[:-4]}_columns.csv'
-                df = order_and_save_columns_as_csv(df, col_filename)
+            filename = 'features_df_debug' if debug else "features_df"
+            with open (f'features/{filename}.csv', 'w') as file:
+                df = order_columns(df)
+                save_to_db(df, table_name=filename)
                 df.to_csv(file)
 
-main(debug=False, split=True)
+main(debug=False, split=False)
