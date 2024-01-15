@@ -484,7 +484,7 @@ def save_to_db(df, table_name, db_path='clients_infos'):
     """
 
     conn = sqlite3.connect(f'features/{db_path}.db')
-    df.to_sql(f'{table_name}', conn, if_exists='replace', index=False)
+    df.to_sql(f'{table_name}', conn, if_exists='replace', index=True)
     conn.close()
 
 def main(debug: bool = True, split: bool = True):
@@ -570,4 +570,4 @@ def main(debug: bool = True, split: bool = True):
                 save_to_db(df, table_name=filename)
                 df.to_csv(file)
 
-main(debug=False, split=False)
+main(debug=False, split=True)
