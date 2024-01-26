@@ -33,6 +33,14 @@ from mlflow.models import infer_signature
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from lime import lime_tabular
+import shap
+
+import io
+import os
+
+from mlflow.store.artifact.utils.models import get_model_name_and_version
+
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -88,6 +96,20 @@ def mlflow_run(title: str):
         mlflow.end_run()
         print(f"{title} - run ended")
 
+def get_folder_latest_version(path, folder_prefix):
+    # Get a list of directories in the specified path
+    dirs = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
+
+    # Filter directories with the specified prefix
+    matching_dirs = [d for d in dirs if d.startswith(folder_prefix)]
+
+    # If matching directories exist, find the latest version
+    if matching_dirs:
+        latest_version = max([int(d.split('-')[-1]) for d in matching_dirs])
+        return latest_version
+    else:
+        return None  # No matching directories found
+
 def filter_params(params, param_grid):
     return {key: value for key, value in param_grid.items() if key in params}
 
@@ -131,7 +153,7 @@ def custom_fbeta_score(y_true, y_pred, beta: float=np.sqrt(10)):
 def threshold_cut(y_hat: np.ndarray, threshold=0.5):
     return y_hat >= threshold
 
-def fbeta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float=np.sqrt(10), show_classification: bool=True) -> Tuple[np.ndarray, np.ndarray, pd.DataFrame]:
+def fbeta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float=np.sqrt(10), show_classification: bool=True) -> Tuple[np.ndarray, List[np.ndarray], pd.DataFrame]:
     """
     Calculate the F-beta curve.
 
@@ -150,8 +172,8 @@ def fbeta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float=np.sqrt(10), 
     if show_classification:
         precision = [precision_score(y_true, threshold_cut(y_hat, threshold=t), zero_division=1) for t in thresholds]
         recall = [recall_score(y_true, threshold_cut(y_hat, threshold=t), zero_division=1) for t in thresholds]
-        cost = [custom_cost_function(y_true, threshold_cut(y_hat, threshold=t)) for t in thresholds]
-        cost = np.array(cost)/max(cost)
+        cost = np.array([custom_cost_function(y_true, threshold_cut(y_hat, threshold=t)) for t in thresholds])
+        cost = cost/max(cost)
         accuracy = [accuracy_score(y_true, threshold_cut(y_hat, threshold=t)) for t in thresholds]
 
         scores_df = pd.DataFrame({
@@ -167,7 +189,7 @@ def fbeta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float=np.sqrt(10), 
 
     return thresholds, fbeta_scores, None
 
-def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sqrt(10), model_description: str = '', show_classification: bool=True, save_path: Union[str, None] = None) -> None:
+def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sqrt(10), model_description: str = '', show_classification: bool=True, dpi: int = 300) -> np.array:
     """
     Plot the F-beta curve.
 
@@ -176,7 +198,7 @@ def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sq
         y_pred (np.ndarray): The predicted labels.
 
     Returns:
-        None
+        image_array: The image array of the plot.
     """
     f_beta_curve = fbeta_curve(y_true, y_hat, beta, show_classification=show_classification)
     plt.figure(figsize=(10, 10))
@@ -233,8 +255,16 @@ def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sq
     plt.xlabel('Threshold')
     plt.legend(descriptors, loc='upper right')
     
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=dpi)
+    buffer.seek(0)
+    image_array = plt.imread(buffer)
+
+    return image_array
+    # if save_path:
+    #     plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    # if mlflow_log:
+    #     mlflow.log_figure(fig, mlflow_log, dpi=300, bbox_inches='tight')
 
 def balance_classes(X: pd.DataFrame, y: pd.Series, method: Literal['smote', 'randomundersampler']='smote')-> Tuple[pd.DataFrame, pd.Series]:
     """
@@ -258,7 +288,9 @@ def balance_classes(X: pd.DataFrame, y: pd.Series, method: Literal['smote', 'ran
         raise ValueError("Invalid method. Choose 'smote' or 'randomundersampler'.")
     
     pipeline = Pipeline([('sampler', sampler)])
-    return pipeline.fit_resample(X, y)
+    X_resampled, y_resampled = pipeline.named_steps['sampler'].fit_resample(X, y)
+    # return pipeline.fit_resample(X, y)
+    return X_resampled, y_resampled
 
 def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestClassifier', 'XGBClassifier', 'LGBMClassifier'], search_method: Literal['grid', 'random', 'bayes']) -> dict:
     """
@@ -344,7 +376,7 @@ def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestC
 
     return param_grid
 
-def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Union[list, np.array], X_test: Union[list, np.array], y_test: Union[list, np.array], search_method: Literal['grid', 'random'], balance_method: Literal['smote', 'randomundersampler'], debug: bool = False):
+def tune_model(model: BaseEstimator, X_train: Union[list, np.ndarray], y_train: Union[list, np.array], X_test: Union[list, np.ndarray], y_test: Union[list, np.array], search_method: Literal['grid', 'random', 'bayes'], balance_method: Literal['smote', 'randomundersampler'], debug: bool = False):
     """
     Tune the specified model using grid search or random search based on the specified search method.
     
@@ -398,7 +430,7 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             elif search_method == "random":
                 search = RandomizedSearchCV(model, filtered_grid, cv=5, n_iter=20, scoring='roc_auc')
             elif search_method == "bayes":
-                search = BayesSearchCV(model, filtered_grid, cv=5, n_iter=100, scoring='roc_auc')
+                search = BayesSearchCV(model, filtered_grid, cv=5, n_iter=10, scoring='roc_auc')
             else:
                 raise ValueError("Invalid search method. Choose 'grid', 'random' or 'bayes.")
             
@@ -435,7 +467,12 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.array], y_train: Un
             # Log best model
             mlflow.sklearn.log_model(best_model, artifact_path=path, signature=signature, input_example=X_train_resampled, registered_model_name=model_name)
 
-            plot_f_beta_curve(y_train_resampled, y_hat, model_description='XGBClassifier', show_classification=True, save_path=path)
+            model_path = 'mlruns\models\XGBClassifier'
+            # get the latest version of the model
+            latest_version = get_folder_latest_version(model_path, folder_prefix='version')
+            mlflow.log_image(plot_f_beta_curve(y_train_resampled, y_hat, model_description='XGBClassifier', show_classification=True, dpi=300), artifact_file=f"{path}_f_beta_version_{latest_version}.png")
+
+            # mlflow.log_image(plot_f_beta_curve(y_train_resampled, y_hat, model_description='XGBClassifier', show_classification=True, dpi=300), artifact_file=path + 'f_beta.png')
 
         finally:
             # End MLflow run
