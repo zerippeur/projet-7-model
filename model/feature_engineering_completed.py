@@ -3,10 +3,9 @@ import pandas as pd
 import time
 from contextlib import contextmanager
 import warnings
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, Literal
 from sklearn.model_selection import train_test_split
 warnings.simplefilter(action='ignore', category=FutureWarning)
-import re
 import sqlite3
 
 @contextmanager
@@ -50,7 +49,7 @@ def one_hot_encoder(df: pd.DataFrame, nan_as_category: bool = True) -> Tuple[pd.
     new_columns = list(set(encoded_df.columns) - set(original_columns))
     return encoded_df, new_columns
 
-# Preprocess application_train.csv and application_test.csv
+# Preprocess application_train.csv 
 def application_train_dataset(num_rows=None, nan_as_category=False):
     """
     Reads the application train and test data from CSV files and merges them into a single DataFrame.
@@ -90,8 +89,48 @@ def application_train_dataset(num_rows=None, nan_as_category=False):
 
     return train_data
 
+# Preprocess application_train.csv 
+def application_test_dataset(num_rows=None, nan_as_category=False):
+    """
+    Reads the application train and test data from CSV files and merges them into a single DataFrame.
+
+    Args:
+        num_rows (int, optional): The number of rows to read from the CSV files. Defaults to None.
+        nan_as_category (bool, optional): Whether to treat NaN values as a category. Defaults to False.
+
+    Returns:
+        pandas.DataFrame: The merged DataFrame containing the train and test data.
+    """
+    # Read data and merge
+    test_data = pd.read_csv('./input/application_test.csv', nrows=num_rows, sep=',', encoding='utf_8').reset_index()
+
+    # Optional: Remove 4 applications with XNA CODE_GENDER (train set)
+    test_data = test_data[test_data['CODE_GENDER'] != 'XNA']
+
+    # Categorical features with Binary encode (0 or 1; two categories)
+    binary_features = ['CODE_GENDER', 'FLAG_OWN_CAR', 'FLAG_OWN_REALTY']
+    for feature in binary_features:
+        test_data[feature], _ = pd.factorize(test_data[feature])
+
+    # Categorical features with One-Hot encode
+    test_data, _ = one_hot_encoder(test_data, nan_as_category)
+
+    # NaN values for DAYS_EMPLOYED: 365.243 -> nan
+    test_data['DAYS_EMPLOYED'].replace(365243, np.nan, inplace=True)
+
+    # Some simple new features (percentages)
+    test_data['DAYS_EMPLOYED_PERC'] = test_data['DAYS_EMPLOYED'] / test_data['DAYS_BIRTH']
+    test_data['INCOME_CREDIT_PERC'] = test_data['AMT_INCOME_TOTAL'] / test_data['AMT_CREDIT']
+    test_data['INCOME_PER_PERSON'] = test_data['AMT_INCOME_TOTAL'] / test_data['CNT_FAM_MEMBERS']
+    test_data['ANNUITY_INCOME_PERC'] = test_data['AMT_ANNUITY'] / test_data['AMT_INCOME_TOTAL']
+    test_data['PAYMENT_RATE'] = test_data['AMT_ANNUITY'] / test_data['AMT_CREDIT']
+
+    test_data.set_index('SK_ID_CURR', inplace=True)
+
+    return test_data
+
 # Preprocess bureau.csv and bureau_balance.csv
-def bureau_and_balance(num_rows: int = None, nan_as_category: bool = True) -> pd.DataFrame:
+def bureau_and_balance(num_rows: Union[int, None] = None, nan_as_category: bool = True) -> pd.DataFrame:
     """
     Read the 'bureau.csv' and 'bureau_balance.csv' files and perform data 
     preprocessing and feature engineering on them. 
@@ -174,7 +213,7 @@ def bureau_and_balance(num_rows: int = None, nan_as_category: bool = True) -> pd
     return bureau_agg
 
 # Preprocess previous_applications.csv
-def previous_applications(num_rows: int = None, nan_as_category: bool = True) -> pd.DataFrame:
+def previous_applications(num_rows: Union[int, None] = None, nan_as_category: bool = True) -> pd.DataFrame:
     """
     Reads the 'previous_application.csv' file and performs data preprocessing and feature engineering on it.
     
@@ -356,6 +395,27 @@ def credit_card_balance(max_rows: Optional[int] = None, nan_as_category: bool = 
     
     return credit_card_balance_agg
 
+def select_common_columns(df1: pd.DataFrame, df2: pd.DataFrame, output: Literal['df1', 'df2', 'both']) -> Union[pd.DataFrame, tuple[pd.DataFrame, pd.DataFrame]]:
+    """
+    Select common columns from two dataframes.
+
+    Args:
+        df1 (pd.DataFrame): The first dataframe.
+        df2 (pd.DataFrame): The second dataframe.
+
+    Returns:
+        pd.DataFrame or tuple: The dataframe 1 or 2 or both with only common columns only.
+    """
+    common_columns = list(set(df1.columns) & set(df2.columns))
+    df1 = df1[common_columns]
+    df2 = df2[common_columns]
+    if output == 'df1':
+        return df1
+    elif output == 'df2':
+        return df2
+    else:
+        return df1, df2
+
 def data_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Splits a pandas DataFrame into train and test sets.
@@ -375,7 +435,7 @@ def data_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     return train_df, test_df
 
-def nan_imputation(train_df: pd.DataFrame, test_df: Optional[pd.DataFrame] = None, inf_method: Union[str, None] = 'nan', nan_method: Union[str, None] = 'median') -> None:
+def nan_imputation(train_df: pd.DataFrame, test_df: Optional[pd.DataFrame] = None, inf_method: Union[str, None] = 'nan', nan_method: Union[str, None] = 'median') -> Union[tuple[pd.DataFrame, pd.DataFrame], pd.DataFrame]:
     """
     Imputes missing values in a pandas DataFrame using specified methods.
 
@@ -390,44 +450,57 @@ def nan_imputation(train_df: pd.DataFrame, test_df: Optional[pd.DataFrame] = Non
     Returns:
         None
     """
+
+    train_copy = train_df.copy()
+    if test_df is not None:
+        test_copy = test_df.copy()
+
     inf_methods = ['nan', 'mean', 'median', 'mode']
     nan_methods = ['mean', 'median', 'mode']
 
     if inf_method == 'nan':
-        train_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        train_copy.replace([np.inf, -np.inf], np.nan, inplace=True)
         if test_df is not None:
-            test_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+            test_copy.replace([np.inf, -np.inf], np.nan, inplace=True)
     elif inf_method in inf_methods:
-        for col in train_df.columns:
+        for col in train_copy.columns:
             if inf_method == 'mean':
-                fill_value = train_df[col].mean()
+                fill_value = train_copy[col].mean()
             elif inf_method == 'median':
-                fill_value = train_df[col].median()
+                fill_value = train_copy[col].median()
             elif inf_method == 'mode':
-                fill_value = train_df[col].mode().iloc[0]
+                fill_value = train_copy[col].mode().iloc[0]
             else:
                 fill_value = np.nan
-            train_df[col].fillna(fill_value, inplace=True)
+            train_copy[col].fillna(fill_value, inplace=True)
             if test_df is not None:
-                test_df[col].fillna(fill_value, inplace=True)
+                test_copy[col].fillna(fill_value, inplace=True)
     
     if nan_method in nan_methods:
-        for col in train_df.columns:
+        for col in train_copy.columns:
             if nan_method == 'mean':
-                fill_value = train_df[col].mean()
+                fill_value = train_copy[col].mean()
             elif nan_method == 'median':
-                fill_value = train_df[col].median()
+                fill_value = train_copy[col].median()
             elif nan_method == 'mode':
-                fill_value = train_df[col].mode().iloc[0]
+                fill_value = train_copy[col].mode().iloc[0]
             else:
                 fill_value = np.nan
-            train_df[col].fillna(fill_value, inplace=True)
+            train_copy[col].fillna(fill_value, inplace=True)
             if test_df is not None:
-                test_df[col].fillna(fill_value, inplace=True)
+                test_copy[col].fillna(fill_value, inplace=True)
 
-    train_df.dropna(axis=1, how='all', inplace=True)
+    train_copy.dropna(axis=1, how='all', inplace=True)
     if test_df is not None:
-        test_df.dropna(axis=1, how='all', inplace=True)
+        test_copy.dropna(axis=1, how='all', inplace=True)
+
+    if test_df is not None:
+        train_df = train_copy
+        test_df = test_copy
+        return train_df, test_df
+    else:
+        train_df = train_copy
+        return train_df
 
 def clean_columns_names(df):
     column_names = df.columns.to_list()
@@ -465,8 +538,12 @@ def order_columns(df):
     # Extract column list.
     columns_names = df.columns.to_list()
     columns_names.sort()
-    for i, col in enumerate(['index', 'TARGET']):
-        columns_names.insert(i, columns_names.pop(columns_names.index(col)))
+    if 'TARGET' in columns_names:
+        for i, col in enumerate(['index', 'TARGET']):
+            columns_names.insert(i, columns_names.pop(columns_names.index(col)))
+    else:
+        for i, col in enumerate(['index']):
+            columns_names.insert(i, columns_names.pop(columns_names.index(col)))
 
     return df[columns_names]
 
@@ -487,87 +564,130 @@ def save_to_db(df, table_name, db_path='clients_infos'):
     df.to_sql(f'{table_name}', conn, if_exists='replace', index=True)
     conn.close()
 
-def main(debug: bool = True, split: bool = True):
+def main(debug: bool = True, split: bool = True, data_drift_report: bool = False):
     num_rows = 10000 if debug else None
     df = application_train_dataset(num_rows)
+    df_test = application_test_dataset(num_rows)
 
     with timer("Process bureau and bureau_balance"):
         bureau = bureau_and_balance(num_rows)
         print("Bureau df shape:", bureau.shape)
         df = df.merge(bureau, how='left', on='SK_ID_CURR', validate='1:1')
+        df_test = df_test.merge(bureau, how='left', on='SK_ID_CURR', validate='1:1')
         del bureau
 
     with timer("Process previous_applications"):
         prev = previous_applications(num_rows)
         print("Previous applications df shape:", prev.shape)
         df = df.merge(prev, how='left', on='SK_ID_CURR', validate='1:1')
+        df_test = df_test.merge(prev, how='left', on='SK_ID_CURR', validate='1:1')
         del prev
 
     with timer("Process POS-CASH balance"):
         pos = pos_cash(num_rows)
         print("Pos-cash balance df shape:", pos.shape)
         df = df.merge(pos, how='left', on='SK_ID_CURR', validate='1:1')
+        df_test = df_test.merge(pos, how='left', on='SK_ID_CURR', validate='1:1')
         del pos
 
     with timer("Process installments payments"):
         ins = installments_payments(num_rows)
         print("Installments payments df shape:", ins.shape)
         df = df.merge(ins, how='left', on='SK_ID_CURR', validate='1:1')
+        df_test = df_test.merge(ins, how='left', on='SK_ID_CURR', validate='1:1')
         del ins
     
     with timer("Process credit card balance"):
         cc = credit_card_balance(num_rows)
         print("Credit card balance df shape:", cc.shape)
         df = df.merge(cc, how='left', on='SK_ID_CURR', validate='1:1')
+        df_test = df_test.merge(cc, how='left', on='SK_ID_CURR', validate='1:1')
         del cc
     
     with timer("Final encoding, data type changes"):
         df.drop(columns='index')
+        df_test.drop(columns='index')
+        # print(df.columns, df_test.columns)
         print("features_df shape:", df.shape)
+        print("test_df shape:", df_test.shape)
         df, _ = one_hot_encoder(df, nan_as_category=True)
+        df_test, _ = one_hot_encoder(df_test, nan_as_category=True)
         bool_columns = df.select_dtypes(include='bool').columns
+        bool_columns_test = df_test.select_dtypes(include='bool').columns
         df[bool_columns] = df[bool_columns].astype('int8')
+        df_test[bool_columns_test] = df_test[bool_columns_test].astype('int8')
         df = clean_columns_names(df)
+        df_test = clean_columns_names(df_test)
 
-    if split:
-        with timer("Data split"):
-            train_df, test_df = data_split(df)
-            print("Train df shape:", train_df.shape)
-            print("Test df shape:", test_df.shape)
+    if data_drift_report:
+        with timer("Data drift report"):
+            full_train_df, full_test_df = df.drop(columns='TARGET'), df_test
+
+        with timer("Selecting columns common to full train and full test"):
+            print(full_train_df.shape, full_test_df.shape)
+            full_train_df, full_test_df = select_common_columns(full_train_df, full_test_df, 'both')
 
         with timer("NaN imputation"):
-            nan_values_nb_train = train_df.isna().sum().sum()
-            nan_values_nb_test = test_df.isna().sum().sum()
-            nan_imputation(train_df, test_df)
-            print("NaN values imputed in train set: ", nan_values_nb_train - train_df.isna().sum().sum())
-            print("NaN values imputed in test set: ", nan_values_nb_test - test_df.isna().sum().sum())
+            nan_values_nb_full_train = full_train_df.isna().sum().sum()
+            nan_values_nb_full_test = full_test_df.isna().sum().sum()
+            full_train_df, full_test_df = nan_imputation(full_train_df, full_test_df)
+            print("NaN values imputed in full train set: ", nan_values_nb_full_train - full_train_df.isna().sum().sum())
+            print("NaN values imputed in full test set: ", nan_values_nb_full_test - full_test_df.isna().sum().sum())
 
-        with timer("Selecting columns common to train and test"):
-            common_columns = list(set(train_df.columns) & set(test_df.columns))
-            train_df = train_df[common_columns]
-            test_df = test_df[common_columns]
-        
+        with timer("Selecting columns common to full train and full test"):
+            print(full_train_df.shape, full_test_df.shape)
+            full_train_df, full_test_df = select_common_columns(full_train_df, full_test_df, 'both')
+
         with timer("Data saving"):
-            filenames = ["train_df_debug", "test_df_debug"] if debug else ["train_df", "test_df"]
+            filenames = ["full_train_df_debug", "full_test_df_debug"] if debug else ["full_train_df", "full_test_df"]
             print(filenames)
-            for filename, df in zip(filenames, [train_df, test_df]):
+            for filename, dataframe in zip(filenames, [full_train_df, full_test_df]):
                 with open(f'features/{filename}.csv', 'w') as file:
-                    print(filename, df.shape)
+                    print(filename, dataframe.shape)
+                    dataframe = order_columns(dataframe)
+                    save_to_db(dataframe, table_name=filename)
+                    dataframe.to_csv(file)
+    else:
+        if split:
+            with timer("Data split"):
+                train_df, test_df = data_split(df)
+                print("Train df shape:", train_df.shape)
+                print("Test df shape:", test_df.shape)
+
+            with timer("NaN imputation"):
+                nan_values_nb_train = train_df.isna().sum().sum()
+                nan_values_nb_test = test_df.isna().sum().sum()
+                train_df, test_df = nan_imputation(train_df, test_df)
+                print("NaN values imputed in train set: ", nan_values_nb_train - train_df.isna().sum().sum())
+                print("NaN values imputed in test set: ", nan_values_nb_test - test_df.isna().sum().sum())
+
+            with timer("Selecting columns common to train and test"):
+                print(train_df.shape, test_df.shape)
+                train_df, test_df = select_common_columns(train_df, test_df, 'both')
+            
+            with timer("Data saving"):
+                filenames = ["train_df_debug", "test_df_debug"] if debug else ["train_df", "test_df"]
+                print(filenames)
+                for filename, dataframe in zip(filenames, [train_df, test_df]):
+                    with open(f'features/{filename}.csv', 'w') as file:
+                        print(filename, dataframe.shape)
+                        dataframe = order_columns(dataframe)
+                        save_to_db(dataframe, table_name=filename)
+                        dataframe.to_csv(file)            
+                        
+        else:
+            with timer("NaN imputation"):
+                nan_values_nb = df.isna().sum().sum()
+                df = nan_imputation(df)
+                print("NaN values imputed: ", nan_values_nb - df.isna().sum().sum())
+
+            with timer("Data saving"):
+                filename = 'features_df_debug' if debug else "features_df"
+                with open (f'features/{filename}.csv', 'w') as file:
                     df = order_columns(df)
                     save_to_db(df, table_name=filename)
-                    df.to_csv(file)            
-                    
-    else:
-        with timer("NaN imputation"):
-            nan_values_nb = df.isna().sum().sum()
-            nan_imputation(df)
-            print("NaN values imputed: ", nan_values_nb - df.isna().sum().sum())
+                    df.to_csv(file)
+    
 
-        with timer("Data saving"):
-            filename = 'features_df_debug' if debug else "features_df"
-            with open (f'features/{filename}.csv', 'w') as file:
-                df = order_columns(df)
-                save_to_db(df, table_name=filename)
-                df.to_csv(file)
 
-main(debug=False, split=True)
+main(debug=False, split=False, data_drift_report=False)
