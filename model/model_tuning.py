@@ -501,25 +501,25 @@ parameters_sets = [
     {
         'model': LogisticRegression(n_jobs=-1, random_state=42),
         'search_method': 'bayes',
-        'balance_method': 'randomundersampler'
+        'balance_method': 'randomundersampler',
         'debug': True
     },
     {
         'model': RandomForestClassifier(n_jobs=-1, random_state=42),
         'search_method': 'bayes',
-        'balance_method': 'randomundersampler'
+        'balance_method': 'randomundersampler',
         'debug': True
     },
     {
         'model': XGBClassifier(n_jobs=-1, random_state=42),
         'search_method': 'bayes',
-        'balance_method': 'randomundersampler'
+        'balance_method': 'randomundersampler',
         'debug': True
     },
     {
         'model': LGBMClassifier(n_jobs=-1, random_state=42),
         'search_method': 'bayes',
-        'balance_method': 'randomundersampler'
+        'balance_method': 'randomundersampler',
         'debug': True
     }
 ]
