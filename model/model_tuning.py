@@ -13,7 +13,7 @@ from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 from imblearn.pipeline import Pipeline
 
-from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, roc_curve, accuracy_score, confusion_matrix, make_scorer, fbeta_score, precision_score, recall_score
@@ -261,10 +261,6 @@ def plot_f_beta_curve(y_true: np.ndarray, y_hat: np.ndarray, beta: float = np.sq
     image_array = plt.imread(buffer)
 
     return image_array
-    # if save_path:
-    #     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    # if mlflow_log:
-    #     mlflow.log_figure(fig, mlflow_log, dpi=300, bbox_inches='tight')
 
 def balance_classes(X: pd.DataFrame, y: pd.Series, method: Literal['smote', 'randomundersampler']='smote')-> Tuple[pd.DataFrame, pd.Series]:
     """
@@ -358,16 +354,20 @@ def generate_param_grid(model_name: Literal['LogisticRegression', 'RandomForestC
         elif search_method == 'bayes':
             param_grid = {
                 'bootstrap': Categorical([True, False]),
-                'colsample_bytree': Real(0.7, 1),
-                'gamma': Real(0, 0.2),
-                'learning_rate': Real(0.0001, 0.1),
-                'max_depth': Integer(3, 21),
-                'min_samples_leaf': Integer(1, 5),
-                'min_samples_split': Integer(2, 11),
-                'n_estimators': Integer(100, 301),
-                'reg_alpha': Real(0, 1),
-                'reg_lambda': Real(1, 10),
-                'subsample': Real(0.01, 1)
+                'colsample_bytree': Real(0.1, 1),
+                'gamma': Real(0, 0.5),
+                'learning_rate': Real(0.0001, 0.2),
+                'max_depth': Integer(2, 8),
+                'max_features': Categorical([1, 5, 10, 15, 20, 30]),
+                'max_leaf_nodes': Categorical([5, 8, 10, 12, 15, 20, 30, 40, 50, 60]),
+                'min_child_samples': Integer(1, 20),
+                'min_samples_leaf': Integer(1, 20),
+                'min_samples_split': Integer(2, 20),
+                'n_estimators': Integer(100, 300),
+                'num_leaves': Integer(10, 30),
+                'reg_alpha': Real(0, 2),
+                'reg_lambda': Real(1, 30),
+                'subsample': Real(0.01, 1),
             }
         else:
             raise ValueError("Invalid search method")
@@ -426,11 +426,11 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.ndarray], y_train: 
         try:            
             # Perform grid search or random search based on specified search method
             if search_method == "grid":
-                search = GridSearchCV(model, filtered_grid, cv=5, scoring='roc_auc')
+                search = GridSearchCV(model, filtered_grid, cv=5, scoring='roc_auc', verbose=1, n_jobs=-1)
             elif search_method == "random":
-                search = RandomizedSearchCV(model, filtered_grid, cv=5, n_iter=20, scoring='roc_auc')
+                search = RandomizedSearchCV(model, filtered_grid, cv=5, n_iter=10 if debug else 100, scoring='roc_auc', verbose=1, n_jobs=-1)
             elif search_method == "bayes":
-                search = BayesSearchCV(model, filtered_grid, cv=5, n_iter=10, scoring='roc_auc')
+                search = BayesSearchCV(model, filtered_grid, cv=5, n_iter=10 if debug else 200, scoring='roc_auc', verbose=1, n_jobs=-1)
             else:
                 raise ValueError("Invalid search method. Choose 'grid', 'random' or 'bayes.")
             
@@ -438,7 +438,11 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.ndarray], y_train: 
 
             # # Reconstruct and fit the best model
             best_params = search.best_params_
-            best_model = search.best_estimator_
+            best_model = search.best_estimator_      
+
+            results = search.cv_results_
+            best_index = search.best_index_
+            auc_cv = results['mean_test_score'][best_index]
 
             y_hat = search.predict_proba(X_train_resampled)[:, 1]  # Assuming binary classification
             y_hat_test = search.predict_proba(X_test)[:, 1]
@@ -458,21 +462,20 @@ def tune_model(model: BaseEstimator, X_train: Union[list, np.ndarray], y_train: 
             # mlflow.log_metric("best_score", search.best_score_)  # Log the best score
             metrics = {
                 "auc_train": auc_train,
-                "accuracy_train": accuracy_train,
                 "auc_test": auc_test,
-                "accuracy_test": accuracy_test
+                "auc_test_cv": auc_cv,
+                "accuracy_train": accuracy_train,
+                "accuracy_test": accuracy_test,
             }
             mlflow.log_metrics(metrics)  # Log the metrics
 
             # Log best model
             mlflow.sklearn.log_model(best_model, artifact_path=path, signature=signature, input_example=X_train_resampled, registered_model_name=model_name)
 
-            model_path = 'mlruns\models\XGBClassifier'
+            model_path = f'mlruns\models\{model_name}'
             # get the latest version of the model
             latest_version = get_folder_latest_version(model_path, folder_prefix='version')
-            mlflow.log_image(plot_f_beta_curve(y_train_resampled, y_hat, model_description='XGBClassifier', show_classification=True, dpi=300), artifact_file=f"{path}_f_beta_version_{latest_version}.png")
-
-            # mlflow.log_image(plot_f_beta_curve(y_train_resampled, y_hat, model_description='XGBClassifier', show_classification=True, dpi=300), artifact_file=path + 'f_beta.png')
+            mlflow.log_image(plot_f_beta_curve(y_train_resampled, y_hat, model_description=model_name, show_classification=True, dpi=300), artifact_file=f"{path}_f_beta_version_{latest_version}.png")
 
         finally:
             # End MLflow run
@@ -494,4 +497,32 @@ def main(model: Union[LogisticRegression, RandomForestClassifier, XGBClassifier,
     with timer("Tuning model"):
         tune_model(model, X_train, y_train, X_test, y_test, search_method, balance_method, debug)
 
-main(model=XGBClassifier(n_jobs=-1, random_state=42), search_method='bayes', balance_method='randomundersampler', debug=True)
+parameters_sets = [
+    {
+        'model': LogisticRegression(n_jobs=-1, random_state=42),
+        'search_method': 'bayes',
+        'balance_method': 'randomundersampler'
+        'debug': True
+    },
+    {
+        'model': RandomForestClassifier(n_jobs=-1, random_state=42),
+        'search_method': 'bayes',
+        'balance_method': 'randomundersampler'
+        'debug': True
+    },
+    {
+        'model': XGBClassifier(n_jobs=-1, random_state=42),
+        'search_method': 'bayes',
+        'balance_method': 'randomundersampler'
+        'debug': True
+    },
+    {
+        'model': LGBMClassifier(n_jobs=-1, random_state=42),
+        'search_method': 'bayes',
+        'balance_method': 'randomundersampler'
+        'debug': True
+    }
+]
+for params in parameters_sets:
+    main(**params)
+main(model=RandomForestClassifier(n_jobs=-1, random_state=42), search_method='bayes', balance_method='randomundersampler', debug=True)
